@@ -10,16 +10,18 @@ const isBrowser = typeof window !== "undefined";
 export const tokenStorage = {
   get: (key: string): string | null => {
     if (!isBrowser) return null;
-    const sessionValue = window.sessionStorage.getItem(key);
-    if (sessionValue) {
-      return sessionValue;
+    // Prefer localStorage so auth survives full browser restarts
+    const localValue = window.localStorage.getItem(key);
+    if (localValue) {
+      return localValue;
     }
-    return window.localStorage.getItem(key);
+    return window.sessionStorage.getItem(key);
   },
   set: (key: string, value: string) => {
     if (!isBrowser) return;
+    // Store in localStorage for persistence; keep sessionStorage in sync
+    window.localStorage.setItem(key, value);
     window.sessionStorage.setItem(key, value);
-    window.localStorage.removeItem(key);
   },
   remove: (key: string) => {
     if (!isBrowser) return;
