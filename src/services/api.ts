@@ -1,6 +1,6 @@
 import axios, { AxiosHeaders, type AxiosError, type AxiosRequestConfig, type RawAxiosRequestHeaders } from "axios";
 
-const BASE_URL = "https://baap-teams.onrender.com";
+const BASE_URL = "https://4f54105cbecb.ngrok-free.app/";
 
 export const ACCESS_TOKEN_KEY = "authToken";
 export const REFRESH_TOKEN_KEY = "refreshToken";
