@@ -56,7 +56,8 @@ const Chats = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
- 
+  const wsConnRef = useRef<ReturnType<typeof wsService.connectDirect> | null>(null);
+
   const {
     data: pendingRequests = [],
     isLoading: isPendingLoading,
@@ -66,7 +67,7 @@ const Chats = () => {
     queryKey: ["friends", "pending"],
     queryFn: friendsService.getPendingRequests,
   });
- 
+
   const {
     data: friendList = [],
     isLoading: isFriendsLoading,
@@ -76,7 +77,7 @@ const Chats = () => {
     queryKey: ["friends", "list"],
     queryFn: friendsService.getFriendList,
   });
- 
+
   const {
     data: sentRequests = [],
     isLoading: isSentLoading,
@@ -86,7 +87,7 @@ const Chats = () => {
     queryKey: ["friends", "sent"],
     queryFn: friendsService.getSentRequests,
   });
- 
+
   const chats = useMemo<Chat[]>(
     () =>
       friendList.map((friend: FriendListItem) => ({
@@ -103,25 +104,25 @@ const Chats = () => {
       })),
     [friendList]
   );
- 
+
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
     [chats, selectedChatId]
   );
- 
+
   useEffect(() => {
     const handleResize = () => setIsDesktop(window.innerWidth >= 768);
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
- 
+
   useEffect(() => {
     if (isDesktop && !selectedChatId && chats[0]) {
       setSelectedChatId(chats[0].id);
     }
   }, [isDesktop, selectedChatId, chats]);
- 
+
   useEffect(() => {
     if (selectedChatId && !chats.some((chat) => chat.id === selectedChatId)) {
       setSelectedChatId(chats[0]?.id ?? null);
@@ -130,7 +131,7 @@ const Chats = () => {
       setSelectedChatId(chats[0].id);
     }
   }, [chats, selectedChatId]);
- 
+
   // Load direct messages when chat changes
   useEffect(() => {
     const load = async () => {
@@ -189,12 +190,14 @@ const Chats = () => {
       },
     });
 
+    wsConnRef.current = conn;
+
     return () => {
+      wsConnRef.current = null;
       conn.close();
     };
   }, [user?.id, selectedChat?.user.id]);
 
- 
   const filteredChats = useMemo(() => {
     return chats.filter((chat) => {
       const matchesSearch = chat.user.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -205,7 +208,7 @@ const Chats = () => {
       return matchesSearch && matchesFilter;
     });
   }, [chats, filter, searchQuery]);
- 
+
   const pendingChatItems = useMemo(
     () =>
       sentRequests.map((request) => ({
@@ -216,7 +219,7 @@ const Chats = () => {
       })),
     [sentRequests]
   );
- 
+
   const filteredPendingChats = useMemo(() => {
     if (filter !== "all") return [];
     const query = searchQuery.trim().toLowerCase();
@@ -225,7 +228,7 @@ const Chats = () => {
       item.name.toLowerCase().includes(query) || item.email.toLowerCase().includes(query)
     );
   }, [filter, pendingChatItems, searchQuery]);
- 
+
   const filteredIncomingRequests = useMemo(() => {
     if (filter !== "all") return [];
     const query = searchQuery.trim().toLowerCase();
@@ -236,17 +239,17 @@ const Chats = () => {
       return name.includes(query) || email.includes(query);
     });
   }, [filter, pendingRequests, searchQuery]);
- 
+
   const shouldShowPendingSections = filter === "all";
- 
+
   useEffect(() => {
     const query = friendQuery.trim();
- 
+
     if (!query) {
       setFriendResults([]);
       return;
     }
- 
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       api
@@ -264,7 +267,7 @@ const Chats = () => {
               isOnline: Boolean(u.isOnline ?? false),
             }))
             .filter((u) => u.id && u.name);
- 
+
           setFriendResults(mapped);
         })
         .catch((error) => {
@@ -273,22 +276,21 @@ const Chats = () => {
           }
         });
     }, 300);
- 
     return () => {
       clearTimeout(timeoutId);
       controller.abort();
     };
   }, [friendQuery]);
- 
+
   const invalidateFriendQueries = () => {
     queryClient.invalidateQueries({ queryKey: ["friends", "pending"] });
     queryClient.invalidateQueries({ queryKey: ["friends", "list"] });
     queryClient.invalidateQueries({ queryKey: ["friends", "sent"] });
     queryClient.invalidateQueries({ queryKey: ["friends", "blocked"] });
   };
- 
+
   const [actingRequestId, setActingRequestId] = useState<string | null>(null);
- 
+
   const acceptMutation = useMutation({
     mutationFn: friendsService.acceptRequest,
     onMutate: (requestId: string) => {
@@ -309,7 +311,7 @@ const Chats = () => {
       setActingRequestId(null);
     },
   });
- 
+
   const rejectMutation = useMutation({
     mutationFn: friendsService.rejectRequest,
     onMutate: (requestId: string) => {
@@ -330,7 +332,7 @@ const Chats = () => {
       setActingRequestId(null);
     },
   });
- 
+
   const sendRequestMutation = useMutation({
     mutationFn: friendsService.sendRequest,
     onSuccess: (data) => {
@@ -351,7 +353,7 @@ const Chats = () => {
       });
     },
   });
- 
+
   const blockFriendMutation = useMutation({
     mutationFn: friendsService.blockFriend,
     onSuccess: (data) => {
@@ -370,10 +372,10 @@ const Chats = () => {
       });
     },
   });
- 
+
   const handleSendFriendRequest = (friendId: string) => {
     if (!friendId) return;
- 
+
     const existingChat = chats.find((chat) => chat.userId === friendId);
     if (existingChat) {
       setSelectedChatId(existingChat.id);
@@ -384,7 +386,7 @@ const Chats = () => {
       setIsCreateChatOpen(false);
       return;
     }
- 
+
     const alreadySent = sentRequests.some(
       (request) => request.receiverId === friendId && request.status === "pending"
     );
@@ -395,13 +397,25 @@ const Chats = () => {
       });
       return;
     }
- 
+
     sendRequestMutation.mutate(friendId);
   };
- 
+
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !selectedChat?.user.id || !user?.id) return;
- 
+
+    if (wsConnRef.current?.isOpen()) {
+      wsConnRef.current.send({
+        type: "direct_message",
+        payload: {
+          receiver_id: selectedChat.user.id,
+          content: messageInput.trim(),
+        },
+      });
+      setMessageInput("");
+      return;
+    }
+
     const temp: Message = {
       id: `temp-${Date.now()}`,
       chatId: selectedChat.id,
