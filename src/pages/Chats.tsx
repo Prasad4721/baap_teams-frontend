@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Paperclip, Send, Smile, Info, Phone, Video, Plus, ArrowLeft, Loader2, Ban } from "lucide-react";
+import { Paperclip, Send, Smile, Info, Phone, Video, Plus, ArrowLeft, Loader2, Ban, X } from "lucide-react";
+
 import {
   Dialog,
   DialogContent,
@@ -28,19 +30,22 @@ import { useAuth } from "@/context/AuthContext";
 import { chatService, mapBackendToUi } from "@/services/chat";
 import { filesService } from "@/services/files";
 import { wsService } from "@/services/ws";
- 
+
 type Friend = {
   id: string;
   name: string;
   email: string;
   isOnline: boolean;
 };
- 
+
 // messages are loaded from API
- 
+
+const DEFAULT_VISIBLE_MESSAGES = 40;
+const LOAD_MORE_STEP = 25;
+
 const Chats = () => {
   const queryClient = useQueryClient();
- 
+
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "unread" | "read">("all");
@@ -54,9 +59,88 @@ const Chats = () => {
   const { toast } = useToast();
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [visibleCount, setVisibleCount] = useState(DEFAULT_VISIBLE_MESSAGES);
+  const [pendingAttachment, setPendingAttachment] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
-  const wsConnRef = useRef<ReturnType<typeof wsService.connectDirect> | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const preserveScrollRef = useRef<{ prevHeight: number; prevScrollTop: number } | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const initialScrollDoneRef = useRef(false);
+  const isLoadingMoreRef = useRef(false);
+
+  const resetAttachment = () => {
+    setPendingAttachment(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const isNearBottom = () => {
+    const container = messagesContainerRef.current;
+
+    if (!container) return true;
+    const distanceFromBottom =
+      container.scrollHeight - (container.scrollTop + container.clientHeight);
+    return distanceFromBottom < 80;
+  };
+
+  const displayedMessages = useMemo(() => {
+    if (!messages.length) return [];
+    const startIndex = Math.max(0, messages.length - visibleCount);
+    return messages.slice(startIndex);
+  }, [messages, visibleCount]);
+
+  const loadMoreMessages = () => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    if (visibleCount >= messages.length) return;
+
+    if (isLoadingMoreRef.current) return;
+    isLoadingMoreRef.current = true;
+    preserveScrollRef.current = {
+      prevHeight: container.scrollHeight,
+      prevScrollTop: container.scrollTop,
+    };
+    setVisibleCount((prev) => Math.min(messages.length, prev + LOAD_MORE_STEP));
+  };
+
+  const handleScroll: React.UIEventHandler<HTMLDivElement> = (event) => {
+    const container = event.currentTarget;
+    shouldStickToBottomRef.current =
+      container.scrollHeight - (container.scrollTop + container.clientHeight) < 80;
+
+    if (container.scrollTop <= 32 && visibleCount < messages.length) {
+      loadMoreMessages();
+    }
+  };
+
+  useLayoutEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    if (preserveScrollRef.current) {
+      const { prevHeight, prevScrollTop } = preserveScrollRef.current;
+      const currentHeight = container.scrollHeight;
+      const newScrollTop = prevScrollTop + (currentHeight - prevHeight);
+      container.scrollTop = newScrollTop;
+      preserveScrollRef.current = null;
+      isLoadingMoreRef.current = false;
+      return;
+    }
+
+    if (!initialScrollDoneRef.current) {
+      container.scrollTop = container.scrollHeight;
+      initialScrollDoneRef.current = true;
+      shouldStickToBottomRef.current = true;
+      return;
+    }
+
+    if (shouldStickToBottomRef.current) {
+      container.scrollTop = container.scrollHeight - container.clientHeight;
+    }
+  }, [displayedMessages.length, isTyping]);
 
   const {
     data: pendingRequests = [],
@@ -138,6 +222,7 @@ const Chats = () => {
       if (!selectedChat?.user.id) {
         setMessages([]);
         seenMessageIdsRef.current = new Set();
+
         return;
       }
       try {
@@ -149,6 +234,9 @@ const Chats = () => {
           return true;
         });
         setMessages(unique);
+        setVisibleCount(Math.min(DEFAULT_VISIBLE_MESSAGES, unique.length));
+        initialScrollDoneRef.current = false;
+        shouldStickToBottomRef.current = true;
         seenMessageIdsRef.current = seen;
       } catch (error: any) {
         console.error("Error loading direct messages:", error);
@@ -161,6 +249,24 @@ const Chats = () => {
     };
     load();
   }, [selectedChat?.user.id, toast]);
+
+  useEffect(() => {
+    if (!selectedChatId) return;
+    shouldStickToBottomRef.current = true;
+  }, [selectedChatId]);
+
+  useEffect(() => {
+    if (!messages.length && !isTyping) return;
+    const timeout = window.setTimeout(() => {
+      if (shouldStickToBottomRef.current) {
+        const container = messagesContainerRef.current;
+        if (container) {
+          container.scrollTop = container.scrollHeight - container.clientHeight;
+        }
+      }
+    }, 50);
+    return () => window.clearTimeout(timeout);
+  }, [messages, isTyping]);
 
   // Real-time: connect to direct chat WebSocket using current user id
   useEffect(() => {
@@ -182,6 +288,7 @@ const Chats = () => {
             ui.chatId = String(peerId);
             if (seenMessageIdsRef.current.has(ui.id)) return;
             seenMessageIdsRef.current.add(ui.id);
+            shouldStickToBottomRef.current = isNearBottom();
             setMessages((prev) => [...prev, ui]);
           } catch (e) {
             // ignore malformed frames
@@ -190,10 +297,7 @@ const Chats = () => {
       },
     });
 
-    wsConnRef.current = conn;
-
     return () => {
-      wsConnRef.current = null;
       conn.close();
     };
   }, [user?.id, selectedChat?.user.id]);
@@ -276,6 +380,7 @@ const Chats = () => {
           }
         });
     }, 300);
+
     return () => {
       clearTimeout(timeoutId);
       controller.abort();
@@ -402,17 +507,61 @@ const Chats = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedChat?.user.id || !user?.id) return;
+    if (!selectedChat?.user.id || !user?.id) return;
+    const trimmedMessage = messageInput.trim();
 
-    if (wsConnRef.current?.isOpen()) {
-      wsConnRef.current.send({
-        type: "direct_message",
-        payload: {
+    if (!trimmedMessage && !pendingAttachment) return;
+
+    shouldStickToBottomRef.current = true;
+
+    if (pendingAttachment) {
+      const file = pendingAttachment;
+      const tempId = `temp-file-${Date.now()}`;
+      const optimistic: Message = {
+        id: tempId,
+        chatId: selectedChat.id,
+        senderId: user.id,
+        content: trimmedMessage,
+        type: file.type.startsWith("image/") ? "image" : "file",
+        fileUrl: undefined,
+        fileName: file.name,
+        timestamp: new Date().toISOString(),
+        isRead: false,
+        isDelivered: false,
+      };
+      setMessages((prev) => [...prev, optimistic]);
+
+      try {
+        const uploaded = await filesService.upload(file);
+        const sent = await chatService.sendDirectMessage({
+          user_id: user.id,
           receiver_id: selectedChat.user.id,
-          content: messageInput.trim(),
-        },
-      });
-      setMessageInput("");
+          content: trimmedMessage || undefined,
+          file_url: uploaded.path,
+          file_name: uploaded.originalFilename,
+          file_type: file.type || undefined,
+        });
+        seenMessageIdsRef.current.add(sent.id);
+        shouldStickToBottomRef.current = isNearBottom();
+        setMessages((prev) => {
+          const already = prev.some((m) => m.id === sent.id);
+          if (already) {
+            return prev.filter((m) => m.id !== tempId);
+          }
+          return prev.map((m) => (m.id === tempId ? sent : m));
+        });
+        setMessageInput("");
+      } catch (error: any) {
+        console.error("Error sending attachment:", error);
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        toast({
+          title: "File send failed",
+          description: error?.response?.data?.detail || error?.message || "Could not send the file",
+          variant: "destructive",
+        });
+      } finally {
+        resetAttachment();
+      }
       return;
     }
 
@@ -420,7 +569,7 @@ const Chats = () => {
       id: `temp-${Date.now()}`,
       chatId: selectedChat.id,
       senderId: user.id,
-      content: messageInput,
+      content: trimmedMessage,
       type: "text",
       timestamp: new Date().toISOString(),
       isRead: false,
@@ -428,7 +577,7 @@ const Chats = () => {
     };
     setMessages((prev) => [...prev, temp]);
     setMessageInput("");
- 
+
     try {
       const sent = await chatService.sendDirectMessage({
         user_id: user.id,
@@ -437,6 +586,7 @@ const Chats = () => {
       });
       // Mark final ID to avoid WS duplicate
       seenMessageIdsRef.current.add(sent.id);
+      shouldStickToBottomRef.current = isNearBottom();
       setMessages((prev) => {
         const already = prev.some((m) => m.id === sent.id);
         if (already) {
@@ -455,66 +605,28 @@ const Chats = () => {
       });
     }
   };
- 
+
   const openFilePicker = () => fileInputRef.current?.click();
- 
-  const handleFileSelected: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+
+  const handleFileSelected: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedChat?.user.id || !user?.id) return;
- 
-    const tempId = `temp-file-${Date.now()}`;
-    const optimistic: Message = {
-      id: tempId,
-      chatId: selectedChat.id,
-      senderId: user.id,
-      content: messageInput || "",
-      type: file.type.startsWith("image/") ? "image" : "file",
-      fileUrl: undefined,
-      fileName: file.name,
-      timestamp: new Date().toISOString(),
-      isRead: false,
-      isDelivered: false,
-    };
-    setMessages((prev) => [...prev, optimistic]);
- 
-    try {
-      const uploaded = await filesService.upload(file);
-      const sent = await chatService.sendDirectMessage({
-        user_id: user.id,
-        receiver_id: selectedChat.user.id,
-        content: messageInput || undefined,
-        file_url: uploaded.path,
-        file_name: uploaded.originalFilename,
-        file_type: file.type || undefined,
-      });
-      seenMessageIdsRef.current.add(sent.id);
-      setMessages((prev) => {
-        const already = prev.some((m) => m.id === sent.id);
-        if (already) {
-          return prev.filter((m) => m.id !== tempId);
-        }
-        return prev.map((m) => (m.id === tempId ? sent : m));
-      });
-    } catch (error: any) {
-      console.error("Error uploading/sending file:", error);
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      toast({
-        title: "File send failed",
-        description: error?.response?.data?.detail || error?.message || "Could not send the file",
-        variant: "destructive",
-      });
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      setMessageInput("");
+    if (!file) {
+      resetAttachment();
+      return;
+    }
+    setPendingAttachment(file);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
   };
- 
+
   const handleBlockFriend = (friendId: string) => {
     if (!friendId || blockFriendMutation.isPending) {
       return;
     }
     blockFriendMutation.mutate(friendId);
   };
+
   const formatRequestDate = (request: FriendRequestType) => {
     try {
       return new Date(request.createdAt).toLocaleString();
@@ -522,7 +634,7 @@ const Chats = () => {
       return "";
     }
   };
- 
+
   return (
     <div className="flex h-full flex-col gap-4 md:flex-row md:gap-0 md:overflow-hidden">
       {/* Chat List */}
@@ -620,7 +732,7 @@ const Chats = () => {
             }
           />
         </div>
- 
+
         <div className="flex-1 overflow-y-auto space-y-4 p-4 pt-0">
           {shouldShowPendingSections && (
             <div className="space-y-6">
@@ -678,7 +790,7 @@ const Chats = () => {
                   </div>
                 )}
               </div>
- 
+
               <div className="space-y-2">
                 {(isSentLoading || isSentFetching) && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -713,7 +825,7 @@ const Chats = () => {
               </div>
             </div>
           )}
- 
+
           {(isFriendsLoading || isFriendsFetching) && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -736,7 +848,7 @@ const Chats = () => {
           ))}
         </div>
       </div>
- 
+
       {/* Chat Window */}
       {selectedChat ? (
         <div className="flex-1 flex flex-col bg-background border border-border rounded-lg md:border-none md:rounded-none">
@@ -790,10 +902,14 @@ const Chats = () => {
               </Button>
             </div>
           </div>
- 
+
           {/* Messages Area */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-2">
-            {messages.map((message) => (
+          <div
+            ref={messagesContainerRef}
+            onScroll={handleScroll}
+            className="flex-1 overflow-y-auto p-4 space-y-2"
+          >
+            {displayedMessages.map((message) => (
               <MessageBubble
                 key={message.id}
                 message={message}
@@ -812,7 +928,7 @@ const Chats = () => {
               </div>
             )}
           </div>
- 
+
           {/* Message Input */}
           <div className="border-t border-border p-4 bg-card">
             <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
@@ -820,16 +936,33 @@ const Chats = () => {
                 <Paperclip className="h-5 w-5" />
               </Button>
               <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelected} />
-              <Input
-                placeholder="Type a message..."
-                value={messageInput}
-                onChange={(e) => setMessageInput(e.target.value)}
-                onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                className="flex-1 order-1 md:order-2"
-              />
+              <div className="flex-1 order-1 md:order-2 flex flex-col gap-2">
+                {pendingAttachment && (
+                  <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
+                    <Paperclip className="h-4 w-4 text-muted-foreground" />
+                    <div className="flex-1 truncate">
+                      <p className="font-medium truncate">{pendingAttachment.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {Math.round(pendingAttachment.size / 1024)} KB
+                      </p>
+                    </div>
+                    <Button variant="ghost" size="icon" onClick={resetAttachment}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
+                <Input
+                  placeholder={pendingAttachment ? "Add a caption..." : "Type a message..."}
+                  value={messageInput}
+                  onChange={(e) => setMessageInput(e.target.value)}
+                  onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
+                  className="w-full"
+                />
+              </div>
               <Button variant="ghost" size="icon" className="order-3 md:order-3">
                 <Smile className="h-5 w-5" />
               </Button>
+
               <Button onClick={handleSendMessage} size="icon" className="order-4 md:order-4">
                 <Send className="h-5 w-5" />
               </Button>

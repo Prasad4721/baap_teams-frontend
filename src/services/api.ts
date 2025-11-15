@@ -1,6 +1,6 @@
 import axios, { AxiosHeaders, type AxiosError, type AxiosRequestConfig, type RawAxiosRequestHeaders } from "axios";
 
-const BASE_URL = "https://4f54105cbecb.ngrok-free.app/";
+const BASE_URL = "https://baap-teams.onrender.com:10000";
 
 export const ACCESS_TOKEN_KEY = "authToken";
 export const REFRESH_TOKEN_KEY = "refreshToken";
@@ -10,18 +10,16 @@ const isBrowser = typeof window !== "undefined";
 export const tokenStorage = {
   get: (key: string): string | null => {
     if (!isBrowser) return null;
-    // Prefer localStorage so auth survives full browser restarts
-    const localValue = window.localStorage.getItem(key);
-    if (localValue) {
-      return localValue;
+    const sessionValue = window.sessionStorage.getItem(key);
+    if (sessionValue) {
+      return sessionValue;
     }
-    return window.sessionStorage.getItem(key);
+    return window.localStorage.getItem(key);
   },
   set: (key: string, value: string) => {
     if (!isBrowser) return;
-    // Store in localStorage for persistence; keep sessionStorage in sync
-    window.localStorage.setItem(key, value);
     window.sessionStorage.setItem(key, value);
+    window.localStorage.removeItem(key);
   },
   remove: (key: string) => {
     if (!isBrowser) return;
