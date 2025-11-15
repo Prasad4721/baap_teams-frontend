@@ -49,12 +49,12 @@ export function Search({
   useEffect(() => {
       if (!value) return; // avoid empty calls
  
-      fetch(`http://127.0.0.1:8000/search?q=${encodeURIComponent(value)}`)
+      fetch(`https://baap-teams.onrender.com/search?q=${encodeURIComponent(value)}`)
         .then(response => response.json())
         .then(data => console.log(data))
         .catch(error => console.error(error));
  
-         fetch(`http://127.0.0.1:8000/docs#/Search/search_groups_search_groups_get=${encodeURIComponent(value)}`)
+         fetch(`https://baap-teams.onrender.com/docs#/Search/search_groups_search_groups_get=${encodeURIComponent(value)}`)
     .then(response => response.json())
     .then(data => console.log("Users API:", data))
     .catch(error => console.error("Users API Error:", error));
