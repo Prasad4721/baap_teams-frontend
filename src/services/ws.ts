@@ -71,7 +71,7 @@ const connect = (path: string, handlers: WSHandlers = {}, retry = true) => {
  
 export const wsService = {
   connectDirect: (userId: string, handlers: WSHandlers = {}) =>
-    connect(`/ws/chat/${encodeURIComponent(userId)}`, handlers, true),
+    connect(`/ws/chat?user_id=${encodeURIComponent(userId)}`, handlers, true),
   connectGroup: (groupId: string, userId: string, handlers: WSHandlers = {}) =>
     connect(`/ws/groups/${encodeURIComponent(groupId)}/${encodeURIComponent(userId)}`, handlers, true),
 };
